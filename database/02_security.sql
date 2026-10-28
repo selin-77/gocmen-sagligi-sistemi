@@ -82,3 +82,43 @@ GRANT SELECT ON epidemiological_summary TO analyst_role;
 -- Not: Doktor politikaları tüm satırlara izin verir.
 -- Hastaya özel satır kısıtlaması için ek eşleştirme gerekir.
 -- Uygulama kullanıcıları için ayrıca LOGIN rolleri tanımlanmalıdır.
+-- 6. Kişisel bilgileri maskeleyen görünüm
+CREATE OR REPLACE VIEW anonymized_patients AS
+SELECT
+    patient_id,
+    LEFT(first_name, 1) || '***' AS first_name,
+    '***' AS last_name,
+    '***' AS passport_number,
+    nationality,
+    birth_date,
+    gender,
+    '***' AS phone
+FROM patients;
+
+-- Yetkisiz erişimi kapat, yalnızca analiste izin ver
+REVOKE ALL ON anonymized_patients
+FROM PUBLIC, doctor_role, analyst_role, unauthorized_role;
+
+GRANT SELECT ON anonymized_patients TO analyst_role;
+
+-- 7. Sağlık kaydı oluşturulurken tarih alanını otomatik doldur
+CREATE OR REPLACE FUNCTION set_health_record_created_at()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF NEW.created_at IS NULL THEN
+        NEW.created_at := CURRENT_TIMESTAMP;
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_health_record_created_at
+ON health_records;
+
+CREATE TRIGGER trg_health_record_created_at
+BEFORE INSERT ON health_records
+FOR EACH ROW
+EXECUTE FUNCTION set_health_record_created_at();

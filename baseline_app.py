@@ -1,4 +1,3 @@
-
 import os
 import time
 import psycopg2
@@ -13,6 +12,8 @@ def get_connection():
         password=os.getenv("DB_PASSWORD", ""),
         port=5432,
     )
+
+
 def request_data(user_role, requested_data):
     """Veri isteğini uygulama katmanında yetkilendirir."""
     if not authorize(user_role, requested_data):
@@ -44,16 +45,17 @@ def request_data(user_role, requested_data):
         finally:
             connection.close()
 
+
 def get_patient_summary():
     """Baseline için temel hasta istatistiklerini getirir."""
     connection = get_connection()
 
     try:
         with connection.cursor() as cursor:
-            start = time.perf_counter()
-
             cursor.execute("SELECT COUNT(*) FROM patients;")
             patient_count = cursor.fetchone()[0]
+
+            start = time.perf_counter()
 
             cursor.execute("""
                 SELECT
