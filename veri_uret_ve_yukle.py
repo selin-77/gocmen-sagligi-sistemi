@@ -3,8 +3,9 @@ import os
 import random
 import psycopg2
 
-print("Sentetik veri üretimi ve veritabanına aktarımı başlatılıyor...")
+print("Suriyeli sığınmacı odaklı sentetik veri üretimi başlatılıyor...")
 
+# Şevval'in uyarısı: Yanlışlıkla veri silinmesini önlemek için varsayılan kapalı
 CLEAR_EXISTING_DATA = False
 
 try:
@@ -25,43 +26,42 @@ try:
         "TRUNCATE TABLE health_records, locations, patients RESTART IDENTITY"
         " CASCADE;"
     )
-    print(
-        "UYARI: CLEAR_EXISTING_DATA aktif olduğu için eski veriler temizlendi."
-    )
+    print("UYARI: CLEAR_EXISTING_DATA aktif olduğu için eski veriler temizlendi.")
   else:
-    print(
-        "Mevcut veriler korunuyor; yeni veriler güvenli akışla işleniyor."
-    )
+    print("Mevcut veriler korunuyor; yeni veriler güvenli akışla işleniyor.")
 
   toplam_kayit = 20000
 
   base_lat = 39.6484
   base_lon = 27.8826
 
+  # Suriyeli mülteci profiline uygun isim, soyisim ve sınır kapıları havuzu
   isimler = [
-      "Ali",
-      "Fatma",
-      "Mehmet",
-      "Aisha",
-      "Omar",
-      "Zainab",
-      "Youssef",
-      "Leyla",
+      "Muhammed",
       "Ahmed",
+      "Ali",
+      "Omar",
+      "Youssef",
+      "İbrahim",
+      "Fatima",
+      "Aisha",
+      "Zainab",
       "Meryem",
+      "Halil",
+      "Mahmoud",
   ]
   soyisimler = [
-      "Yılmaz",
-      "Demir",
-      "Al-Hassan",
-      "Kaya",
-      "Chechen",
-      "Çelik",
+      "El-Hasan",
+      "El-Ahmed",
+      "Al-Khatib",
+      "Al-Jassem",
       "El-Amin",
-      "Şahin",
+      "Demir",
+      "Kaya",
+      "Çelik",
   ]
   cinsiyetler = ["E", "K"]
-  uyruklar = ["Suriye", "Afganistan", "Irak", "Filistin", "Ukrayna"]
+  
   hastaliklar = [
       "Hipertansiyon",
       "Diyabet",
@@ -71,29 +71,27 @@ try:
       "Bronşit",
   ]
   as_durumlari = ["Tam Aşılı", "Eksik Aşılı", "Aşısız"]
-  sinirlere_gore_kapilar = [
-      "Kapıkule",
-      "Hamzabeyli",
-      "Öncüpınar",
-      "Yayladağı",
-      "Derecik",
+  
+  sinir_kapilari = [
+      "Öncüpınar (Kilis)",
+      "Cilvegözü (Hatay)",
+      "Akçakale (Şanlıurfa)",
+      "Yayladağı (Hatay)",
   ]
 
-  print(
-      "Hastalar üretiliyor ve veritabanına eklenip gerçek ID'leri alınıyor..."
-  )
+  print("Hastalar üretiliyor ve 99 ile başlayan Geçici Kimlik numaraları atanıyor...")
 
-  # 1. Adım: Hastaları ekleyip RETURNING patient_id ile gerçek veritabanı ID'lerini topluyoruz
   uretilen_patient_id_listesi = []
 
   for _ in range(toplam_kayit):
     ad = random.choice(isimler)
     soyad = random.choice(soyisimler)
-    passport = f"U{random.randint(1000000, 9999999)}"
-    uyruk = random.choice(uyruklar)
-    dogum_tarihi = datetime(1960, 1, 1) + timedelta(
-        days=random.randint(0, 18000)
-    )
+    
+    # Türkiye'deki geçici koruma statüsüne uygun 99 ile başlayan 11 haneli yabancı kimlik no
+    kimlik_no = f"99{random.randint(100000000, 999999999)}"
+    
+    uyruk = "Suriye"
+    dogum_tarihi = datetime(1960, 1, 1) + timedelta(days=random.randint(0, 18000))
     cinsiyet = random.choice(cinsiyetler)
     telefon = f"05{random.randint(100, 999)}{random.randint(1000000, 9999999)}"
 
@@ -103,25 +101,19 @@ try:
             VALUES (%s, %s, %s, %s, %s, %s, %s) 
             RETURNING patient_id;
         """,
-        (ad, soyad, passport, uyruk, dogum_tarihi.date(), cinsiyet, telefon),
+        (ad, soyad, kimlik_no, uyruk, dogum_tarihi.date(), cinsiyet, telefon),
     )
 
-    # Veritabanının atadığı gerçek ID'yi alıp listeye atıyoruz
     gercek_id = cursor.fetchone()[0]
     uretilen_patient_id_listesi.append(gercek_id)
 
-  print(
-      "Lokasyonlar ve sağlık kayıtları, alınan gerçek patient_id'lerle"
-      " ilişkilendiriliyor..."
-  )
+  print("Sınır kapısı lokasyonları ve sağlık kayıtları gerçek ID'lerle ilişkilendiriliyor...")
 
-  # 2. Adım: Alınan gerçek ID'leri kullanarak locations ve health_records kayıtlarını oluşturalım
   for p_id in uretilen_patient_id_listesi:
-    # Lokasyon verisi
     lat = base_lat + random.uniform(-0.1, 0.1)
     lon = base_lon + random.uniform(-0.1, 0.1)
     geom_point = f"POINT({lon} {lat})"
-    border = random.choice(sinirlere_gore_kapilar)
+    border = random.choice(sinir_kapilari)
     entry_time = datetime(2026, 1, 1) + timedelta(
         days=random.randint(0, 250)
     )
@@ -134,7 +126,6 @@ try:
         (p_id, border, entry_time, geom_point),
     )
 
-    # Sağlık kaydı verisi
     disease = random.choice(hastaliklar)
     chronic = True if disease in ["Hipertansiyon", "Diyabet", "Astım"] else False
     vaccination = random.choice(as_durumlari)
@@ -148,11 +139,10 @@ try:
         (p_id, disease, chronic, vaccination, risk),
     )
 
-  # Her şey yolunda gittiyse kalıcı olarak işle
   connection.commit()
   print(
-      f"\nBAŞARILI: {toplam_kayit} hasta, lokasyon ve sağlık kaydı gerçek"
-      " ID'leriyle güvenle eşleştirilip yüklendi!"
+      f"\nBAŞARILI: {toplam_kayit} Suriyeli sığınmacı kaydı, sınır kapıları ve"
+      " sağlık verileriyle veritabanına güvenle işlendi!"
   )
 
 except Exception as error:
