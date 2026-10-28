@@ -5,9 +5,6 @@ import psycopg2
 
 print("Sentetik veri üretimi ve veritabanına aktarımı başlatılıyor...")
 
-# ŞEVVAL'İN UYARISI İÇİN GÜVENLİK ÖNLEMİ:
-# Yanlışlıkla veri silinmesini önlemek için TRUNCATE varsayılan olarak KAPALIDIR (False).
-# Eğer bilinçli olarak eski verileri sıfırlayıp yeniden yüklemek istersen bunu True yapabilirsin.
 CLEAR_EXISTING_DATA = False
 
 try:
@@ -23,7 +20,6 @@ try:
   connection.autocommit = False
   cursor = connection.cursor()
 
-  # Sadece bayrak açıksa verileri sıfırlar, aksi takdirde mevcut verileri korur
   if CLEAR_EXISTING_DATA:
     cursor.execute(
         "TRUNCATE TABLE health_records, locations, patients RESTART IDENTITY"
@@ -34,15 +30,10 @@ try:
     )
   else:
     print(
-        "Mevcut veriler güvenle korunuyor; yeni veriler şemaya uygun şekilde"
-        " işleniyor."
+        "Mevcut veriler korunuyor; yeni veriler güvenli akışla işleniyor."
     )
 
   toplam_kayit = 20000
-
-  patients_data = []
-  locations_data = []
-  health_records_data = []
 
   base_lat = 39.6484
   base_lon = 27.8826
@@ -88,8 +79,14 @@ try:
       "Derecik",
   ]
 
-  # 1. Hastalar (Patients) Verisi Üretimi
-  for i in range(1, toplam_kayit + 1):
+  print(
+      "Hastalar üretiliyor ve veritabanına eklenip gerçek ID'leri alınıyor..."
+  )
+
+  # 1. Adım: Hastaları ekleyip RETURNING patient_id ile gerçek veritabanı ID'lerini topluyoruz
+  uretilen_patient_id_listesi = []
+
+  for _ in range(toplam_kayit):
     ad = random.choice(isimler)
     soyad = random.choice(soyisimler)
     passport = f"U{random.randint(1000000, 9999999)}"
@@ -100,24 +97,27 @@ try:
     cinsiyet = random.choice(cinsiyetler)
     telefon = f"05{random.randint(100, 999)}{random.randint(1000000, 9999999)}"
 
-    patients_data.append(
-        (ad, soyad, passport, uyruk, dogum_tarihi.date(), cinsiyet, telefon)
+    cursor.execute(
+        """
+            INSERT INTO patients (first_name, last_name, passport_number, nationality, birth_date, gender, phone) 
+            VALUES (%s, %s, %s, %s, %s, %s, %s) 
+            RETURNING patient_id;
+        """,
+        (ad, soyad, passport, uyruk, dogum_tarihi.date(), cinsiyet, telefon),
     )
 
-  print("Hastalar veritabanına yazılıyor...")
-  args_str = ",".join(
-      cursor.mogrify("(%s, %s, %s, %s, %s, %s, %s)", x).decode("utf-8")
-      for x in patients_data
-  )
-  cursor.execute(
-      "INSERT INTO patients (first_name, last_name, passport_number,"
-      " nationality, birth_date, gender, phone) VALUES "
-      + args_str
+    # Veritabanının atadığı gerçek ID'yi alıp listeye atıyoruz
+    gercek_id = cursor.fetchone()[0]
+    uretilen_patient_id_listesi.append(gercek_id)
+
+  print(
+      "Lokasyonlar ve sağlık kayıtları, alınan gerçek patient_id'lerle"
+      " ilişkilendiriliyor..."
   )
 
-  # 2. Lokasyon ve Sağlık Kayıtları Üretimi
-  print("Lokasyonlar ve sağlık kayıtları üretiliyor...")
-  for i in range(1, toplam_kayit + 1):
+  # 2. Adım: Alınan gerçek ID'leri kullanarak locations ve health_records kayıtlarını oluşturalım
+  for p_id in uretilen_patient_id_listesi:
+    # Lokasyon verisi
     lat = base_lat + random.uniform(-0.1, 0.1)
     lon = base_lon + random.uniform(-0.1, 0.1)
     geom_point = f"POINT({lon} {lat})"
@@ -126,34 +126,33 @@ try:
         days=random.randint(0, 250)
     )
 
-    locations_data.append((i, border, entry_time, geom_point))
+    cursor.execute(
+        """
+            INSERT INTO locations (patient_id, border_name, entry_time, geom) 
+            VALUES (%s, %s, %s, ST_GeomFromText(%s, 4326));
+        """,
+        (p_id, border, entry_time, geom_point),
+    )
 
+    # Sağlık kaydı verisi
     disease = random.choice(hastaliklar)
     chronic = True if disease in ["Hipertansiyon", "Diyabet", "Astım"] else False
     vaccination = random.choice(as_durumlari)
     risk = random.randint(1, 10) if chronic else random.randint(1, 3)
 
-    health_records_data.append((i, disease, chronic, vaccination, risk))
-
-  for patient_id, border, entry_time, point in locations_data:
     cursor.execute(
-        "INSERT INTO locations (patient_id, border_name, entry_time, geom)"
-        " VALUES (%s, %s, %s, ST_GeomFromText(%s, 4326))",
-        (patient_id, border, entry_time, point),
+        """
+            INSERT INTO health_records (patient_id, disease_name, chronic_disease, vaccination_status, risk_score) 
+            VALUES (%s, %s, %s, %s, %s);
+        """,
+        (p_id, disease, chronic, vaccination, risk),
     )
 
-  for record in health_records_data:
-    cursor.execute(
-        "INSERT INTO health_records (patient_id, disease_name,"
-        " chronic_disease, vaccination_status, risk_score) VALUES (%s, %s, %s,"
-        " %s, %s)",
-        record,
-    )
-
+  # Her şey yolunda gittiyse kalıcı olarak işle
   connection.commit()
   print(
-      f"\nBAŞARILI: {toplam_kayit} adet sentetik hasta, lokasyon ve sağlık kaydı"
-      " veritabanına güvenle işlendi!"
+      f"\nBAŞARILI: {toplam_kayit} hasta, lokasyon ve sağlık kaydı gerçek"
+      " ID'leriyle güvenle eşleştirilip yüklendi!"
   )
 
 except Exception as error:
