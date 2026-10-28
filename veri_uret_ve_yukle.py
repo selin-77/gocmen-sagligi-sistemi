@@ -5,8 +5,12 @@ import psycopg2
 
 print("Sentetik veri üretimi ve veritabanına aktarımı başlatılıyor...")
 
+# ŞEVVAL'İN UYARISI İÇİN GÜVENLİK ÖNLEMİ:
+# Yanlışlıkla veri silinmesini önlemek için TRUNCATE varsayılan olarak KAPALIDIR (False).
+# Eğer bilinçli olarak eski verileri sıfırlayıp yeniden yüklemek istersen bunu True yapabilirsin.
+CLEAR_EXISTING_DATA = False
+
 try:
-  # Bağlantı bilgileri ve çevre değişkeninden parola güvenliği
   db_password = os.getenv("DB_PASSWORD", "")
 
   connection = psycopg2.connect(
@@ -16,16 +20,23 @@ try:
       password=db_password,
       port="5432",
   )
-  # Yanlışlıkla veri silinmesini veya bozulmasını önlemek için transaction kontrolü
   connection.autocommit = False
   cursor = connection.cursor()
 
-  # Eski verileri güvenli blok içinde temizleyelim
-  cursor.execute(
-      "TRUNCATE TABLE health_records, locations, patients RESTART IDENTITY"
-      " CASCADE;"
-  )
-  print("Eski veriler temizlendi, yeni sentetik veriler üretiliyor...")
+  # Sadece bayrak açıksa verileri sıfırlar, aksi takdirde mevcut verileri korur
+  if CLEAR_EXISTING_DATA:
+    cursor.execute(
+        "TRUNCATE TABLE health_records, locations, patients RESTART IDENTITY"
+        " CASCADE;"
+    )
+    print(
+        "UYARI: CLEAR_EXISTING_DATA aktif olduğu için eski veriler temizlendi."
+    )
+  else:
+    print(
+        "Mevcut veriler güvenle korunuyor; yeni veriler şemaya uygun şekilde"
+        " işleniyor."
+    )
 
   toplam_kayit = 20000
 
@@ -33,7 +44,6 @@ try:
   locations_data = []
   health_records_data = []
 
-  # Balıkesir civarı örnek koordinat sınırları
   base_lat = 39.6484
   base_lon = 27.8826
 
@@ -125,7 +135,6 @@ try:
 
     health_records_data.append((i, disease, chronic, vaccination, risk))
 
-  # Lokasyonları ekleyelim
   for patient_id, border, entry_time, point in locations_data:
     cursor.execute(
         "INSERT INTO locations (patient_id, border_name, entry_time, geom)"
@@ -133,7 +142,6 @@ try:
         (patient_id, border, entry_time, point),
     )
 
-  # Sağlık kayıtlarını ekleyelim
   for record in health_records_data:
     cursor.execute(
         "INSERT INTO health_records (patient_id, disease_name,"
@@ -142,15 +150,13 @@ try:
         record,
     )
 
-  # Her şey başarılı olursa veritabanına kalıcı olarak işle (Commit)
   connection.commit()
   print(
       f"\nBAŞARILI: {toplam_kayit} adet sentetik hasta, lokasyon ve sağlık kaydı"
-      " veritabanına güvenle yüklendi!"
+      " veritabanına güvenle işlendi!"
   )
 
 except Exception as error:
-  # Hata durumunda veritabanını eski güvenli haline geri döndür (Rollback)
   if "connection" in locals() and connection:
     connection.rollback()
   print(f"Hata oluştu, işlem geri alındı: {error}")
