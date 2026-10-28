@@ -37,27 +37,71 @@ ALTER TABLE patients ENABLE ROW LEVEL SECURITY;
 ALTER TABLE health_records ENABLE ROW LEVEL SECURITY;
 ALTER TABLE locations ENABLE ROW LEVEL SECURITY;
 
--- 4. Doktor politikaları
-DROP POLICY IF EXISTS doctor_health_access ON health_records;
-CREATE POLICY doctor_health_access
-ON health_records
-FOR SELECT
-TO doctor_role
-USING (true);
+-- 4. Doktor erişim politikaları
 
+-- Doktor-hasta eşleştirme tablosu
+CREATE TABLE IF NOT EXISTS doctor_patient_access (
+    doctor_username TEXT NOT NULL,
+    patient_id INTEGER NOT NULL
+        REFERENCES patients(patient_id)
+        ON DELETE CASCADE,
+    PRIMARY KEY (doctor_username, patient_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_doctor_patient_access_patient
+ON doctor_patient_access(patient_id);
+
+-- Doktorun atanmış hastasını kontrol eden güvenli fonksiyon
+CREATE OR REPLACE FUNCTION public.doctor_can_access_patient(
+    p_patient_id INTEGER
+)
+RETURNS BOOLEAN
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = pg_catalog, public
+AS $$
+    SELECT EXISTS (
+        SELECT 1
+        FROM public.doctor_patient_access AS dpa
+        WHERE dpa.doctor_username = session_user
+          AND dpa.patient_id = p_patient_id
+    );
+$$;
+
+REVOKE ALL ON FUNCTION public.doctor_can_access_patient(INTEGER)
+FROM PUBLIC;
+
+GRANT EXECUTE ON FUNCTION public.doctor_can_access_patient(INTEGER)
+TO doctor_role;
+
+-- Doktor yalnızca atanmış hastaları görebilir
 DROP POLICY IF EXISTS doctor_patient_access ON patients;
+
 CREATE POLICY doctor_patient_access
 ON patients
 FOR SELECT
 TO doctor_role
-USING (true);
+USING (
+    public.doctor_can_access_patient(patient_id)
+);
 
--- Doktor sağlık kayıtlarını okuyabilir
-GRANT SELECT ON TABLE health_records TO doctor_role;
+-- Doktor yalnızca atanmış hastaların sağlık kayıtlarını görebilir
+DROP POLICY IF EXISTS doctor_health_access ON health_records;
+
+CREATE POLICY doctor_health_access
+ON health_records
+FOR SELECT
+TO doctor_role
+USING (
+    public.doctor_can_access_patient(patient_id)
+);
 
 -- Doktor yalnızca temel hasta bilgilerini okuyabilir
 GRANT SELECT (patient_id, first_name, last_name)
 ON TABLE patients TO doctor_role;
+
+GRANT SELECT ON TABLE health_records TO doctor_role;
 
 -- 5. Analist için toplulaştırılmış epidemiyolojik görünüm
 CREATE OR REPLACE VIEW epidemiological_summary AS
@@ -79,9 +123,7 @@ FROM PUBLIC, doctor_role, analyst_role, unauthorized_role;
 
 GRANT SELECT ON epidemiological_summary TO analyst_role;
 
--- Not: Doktor politikaları tüm satırlara izin verir.
--- Hastaya özel satır kısıtlaması için ek eşleştirme gerekir.
--- Uygulama kullanıcıları için ayrıca LOGIN rolleri tanımlanmalıdır.
+
 -- 6. Kişisel bilgileri maskeleyen görünüm
 CREATE OR REPLACE VIEW anonymized_patients AS
 SELECT
