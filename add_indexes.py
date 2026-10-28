@@ -1,3 +1,4 @@
+import os
 import psycopg2
 
 print("Veritabanı performans indeksleri ekleniyor...")
@@ -7,7 +8,7 @@ try:
         host="localhost",
         database="gocmen_sagligi_db",
         user="postgres",
-        password="",
+        password=os.getenv("DB_PASSWORD", ""),
         port="5432"
     )
     connection.autocommit = True
