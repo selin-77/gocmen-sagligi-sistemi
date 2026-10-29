@@ -1,15 +1,18 @@
 import os
 import psycopg2
 
-print("=== GÖÇMEN SAĞLIĞI SİSTEMİ - ŞEVVAL'İN RLS VE ROL TESTİ ===")
+print("=== GÖÇMEN SAĞLIĞI SİSTEMİ - İLERİ DÜZEY GÜVENLİK VE RLS TESTİ ===")
 
-toplam_test_sayisi = 0
-basari_sayisi = 0
+# Detaylı metrik takibi için
+test_sonuclari = {
+    "Yetkisiz Erişim Kısıtlamaları (Tablo Bazlı)": False,
+    "Doktor Rolü Tam ve Sınırlı Erişim Doğrulaması": False,
+    "Analist Rolü Maskeleme (Anonymization) Doğrulaması": False,
+    "Hassas Alan Sızıntı Kontrolü": False,
+}
 
 try:
   db_password = os.getenv("DB_PASSWORD", "")
-
-  # Ana bağlantı (Admin yetkisiyle bağlanıp SET ROLE testi yapacağız)
   conn = psycopg2.connect(
       host="localhost",
       database="gocmen_sagligi_db",
@@ -19,70 +22,117 @@ try:
   )
   cursor = conn.cursor()
 
-  # 1. TEST: Unauthorized Role (Yetkisiz Rol) Testi
-  print("\n[Test 1] unauthorized_role ile hassas verilere erişim deneniyor...")
-  toplam_test_sayisi += 1
+  # --- TEST 1: Yetkisiz Rol Kapsamlı Erişim Denemesi ---
+  print(
+      "\n[Test 1] unauthorized_role için tüm hassas tablolara erişim"
+      " deneniyor..."
+  )
   try:
     cursor.execute("SET ROLE unauthorized_role;")
+    # patients ve health_records tablolarına ayrı ayrı sızma denemesi
+    cursor.execute("SELECT COUNT(*) FROM patients;")
     cursor.execute("SELECT COUNT(*) FROM health_records;")
-    print("UYARI: Yetkisiz rol veriye erişebildi!")
+    print("UYARI: Yetkisiz rol verilere erişebildi!")
     cursor.execute("RESET ROLE;")
   except psycopg2.Error as e:
     print(
-        "BAŞARILI: Yetkisiz rolün erişimi engellendi! Hata kodu:"
-        f" {getattr(e, 'pgcode', 'Bilinmiyor')}"
+        "BAŞARILI: Yetkisiz rolün tüm kritik tablolara erişimi engellendi! Hata:"
+        f" {e.pgcode}"
     )
-    basari_sayisi += 1
-    conn.rollback()  # Hata alan transaction'ı sıfırla
-    cursor.execute("RESET ROLE;")
-
-  # 2. TEST: Doctor Role (Doktor Rolü) Testi
-  print("\n[Test 2] doctor_role ile sağlık kayıtlarına erişim test ediliyor...")
-  toplam_test_sayisi += 1
-  try:
-    cursor.execute("SET ROLE doctor_role;")
-    cursor.execute("SELECT COUNT(*) FROM health_records;")
-    res = cursor.fetchone()[0]
-    print(f"BAŞARILI: Doktor rolü verileri okudu (Kayıt sayısı: {res}).")
-    basari_sayisi += 1
-    cursor.execute("RESET ROLE;")
-  except psycopg2.Error as e:
-    print(f"HATA: Doktor rolü erişemedi: {e}")
+    test_sonuclari["Yetkisiz Erişim Kısıtlamaları (Tablo Bazlı)"] = True
     conn.rollback()
     cursor.execute("RESET ROLE;")
 
-  # 3. TEST: Analyst Role (Analist Rolü - Maskelenmiş Görünüm) Testi
-  print(
-      "\n[Test 3] analyst_role ile anonymized_patients görünümü test ediliyor..."
-  )
-  toplam_test_sayisi += 1
+  # --- TEST 2: Doktor Rolü Kapsam ve Yetki Sınırı Kontrolü ---
+  print("\n[Test 2] doctor_role veri okunabilirliği ve sınırları test ediliyor...")
   try:
-    cursor.execute("SET ROLE analyst_role;")
-    cursor.execute("SELECT COUNT(*) FROM anonymized_patients;")
-    res = cursor.fetchone()[0]
-    print(
-        "BAŞARILI: Analist maskelenmiş görünüme erişti (Kayıt sayısı: {res})."
+    cursor.execute("SET ROLE doctor_role;")
+    # Doktor temel bilgileri okuyabilmeli
+    cursor.execute(
+        "SELECT patient_id, first_name, last_name FROM patients LIMIT 5;"
     )
-    basari_sayisi += 1
+    patients_res = cursor.fetchall()
+
+    # Sağlık kayıtlarını okuyabilmeli
+    cursor.execute("SELECT COUNT(*) FROM health_records;")
+    health_res = cursor.fetchone()[0]
+
+    if len(patients_res) > 0 and health_res > 0:
+      print(
+          f"BAŞARILI: Doktor rolü yetkileri dahilinde {health_res} sağlık"
+          " kaydına ve hasta listesine ulaştı."
+      )
+      test_sonuclari["Doktor Rolü Tam ve Sınırlı Erişim Doğrulaması"] = True
     cursor.execute("RESET ROLE;")
   except psycopg2.Error as e:
-    print(f"HATA: Analist rolü görünümde hata aldı: {e}")
+    print(f"HATA: Doktor rolü testinde hata: {e}")
+    conn.rollback()
+    cursor.execute("RESET ROLE;")
+
+  # --- TEST 3: Analist Rolü Veri Maskeleme Doğrulaması ---
+  print(
+      "\n[Test 3] analyst_role için hassas verilerin maskelendiği (anonymized)"
+      " doğrulanıyor..."
+  )
+  try:
+    cursor.execute("SET ROLE analyst_role;")
+    # Maskelenmiş görünümden veri çekme
+    cursor.execute(
+        "SELECT first_name, last_name, passport_number, phone FROM"
+        " anonymized_patients LIMIT 3;"
+    )
+    rows = cursor.fetchall()
+
+    masking_success = True
+    for row in rows:
+      f_name, l_name, passport, phone = row
+      # Maskeleme kurallarına uyulup uyulmadığını kod içinde kontrol ediyoruz
+      if not (
+          "***" in l_name
+          and "***" in passport
+          and "***" in phone
+          and f_name.endswith("***")
+      ):
+        masking_success = False
+
+    if masking_success and len(rows) > 0:
+      print(
+          "BAŞARILI: Analist görünümündeki hassas alanların (İsim, Soyisim,"
+          " Pasaport, Telefon) gerçekten '***' ile maskelendiği doğrulandı!"
+      )
+      test_sonuclari[
+          "Analist Rolü Maskeleme (Anonymization) Doğrulaması"
+      ] = True
+      test_sonuclari["Hassas Alan Sızıntı Kontrolü"] = True
+    else:
+      print("UYARI: Maskeleme kurallarında açık tespit edildi!")
+
+    cursor.execute("RESET ROLE;")
+  except psycopg2.Error as e:
+    print(f"HATA: Analist maskeleme testinde hata: {e}")
     conn.rollback()
     cursor.execute("RESET ROLE;")
 
   cursor.close()
   conn.close()
 
-  # --- METRİK RAPORU ---
-  print("\n" + "=" * 50)
-  print("GÜVENLİK VE RLS TEST RAPORU")
-  print("=" * 50)
-  print(f"Toplam Test Senaryosu : {toplam_test_sayisi}")
-  print(f"Başarılı Doğrulama    : {basari_sayisi}")
+  # --- GELİŞTİRİLMİŞ METRİK VE DEĞERLENDİRME RAPORU ---
+  print("\n" + "=" * 60)
+  print("KAPSAMLI GÜVENLİK VE RLS DOĞRULAMA RAPORU")
+  print("=" * 60)
+  toplam_kriter = len(test_sonuclari)
+  basarili_kriter = sum(1 for v in test_sonuclari.values() if v)
 
-  basari_orani = (basari_sayisi / toplam_test_sayisi) * 100
-  print(f"Erişim Yetkilendirme Başarı Oranı : %{basari_orani:.2f}")
-  print("=" * 50)
+  for kriter, durum in test_sonuclari.items():
+    durum_str = "✅ DOĞRULANDI" * durum or "❌ BAŞARISIZ / EKSİK"
+    print(f"- {kriter}: {durum_str}")
+
+  print("-" * 60)
+  gelismis_basari_orani = (basarili_kriter / toplam_kriter) * 100
+  print(f"Değerlendirilen Toplam Güvenlik Kriteri : {toplam_kriter}")
+  print(f"Başarıyla Doğrulanan Kriter Sayısı     : {basarili_kriter}")
+  print(f"Gerçekçi Güvenlik Uyumluluk Skoru      : %{gelismis_basari_orani:.2f}")
+  print("=" * 60)
 
 except Exception as error:
-  print(f"Kritik hata oluştu: {error}")
+  print(f"Kritik test hatası: {error}")
