@@ -20,7 +20,7 @@ def main():
     connection = psycopg2.connect(
         host="localhost",
         database="gocmen_sagligi_db",
-        user="analyst_test",
+        user="analyst_user",
         password=password,
         port=5432,
     )
